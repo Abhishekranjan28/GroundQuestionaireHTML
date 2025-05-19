@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Interactive Questionnaire</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(to right, #e0f7fa, #e1bee7);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .main-wrapper {
+      display: flex;
+      gap: 20px;
+      width: 100%;
+      max-width: 1200px;
+    }
+
+    #answered-questions-panel {
+      flex: 1;
+      background-color: #ffffff;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+
+    #answered-questions-panel h3 {
+      margin-bottom: 10px;
+      text-align: center;
+    }
+
+    #answered-questions {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .answered-question {
+      background-color: #f9f9f9;
+      border-left: 4px solid #6200ea;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 0.95em;
+    }
+
+    .chat-panel {
+      flex: 2;
+    }
+
+    .container {
+      background-color: #fff;
+      border-radius: 16px;
+      padding: 30px 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    input[type="text"], input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      font-size: 1em;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background-color: #f9f9f9;
+    }
+
+    button {
+      background-color: #6200ea;
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 1em;
+    }
+
+    button:hover {
+      background-color: #4a00b4;
+    }
+
+    .spinner-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #6200ea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 10px;
+    }
+
+    .spinner-text {
+      font-size: 0.95em;
+      color: #555;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    pre {
+      background: #f0f0f0;
+      padding: 15px;
+      border-radius: 10px;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 900px) {
+      .main-wrapper {
+        flex-direction: column;
+      }
+
+      #answered-questions-panel, .chat-panel {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div class="main-wrapper">
+
+  <div id="answered-questions-panel">
+    <h3>Answered Questions</h3>
+    <div id="answered-questions"></div>
+  </div>
+
+  <div class="chat-panel">
+    <div id="chat-box" class="container">
+      <h1>Ground Questionnaire</h1>
+      <p id="question-text">Loading question...</p>
+
+      <div class="spinner-container" id="loading-spinner" style="display: none;">
+        <div class="spinner"></div>
+        <p class="spinner-text" id="spinner-text">Validating...</p>
+      </div>
+
+      <form id="qa-form" onsubmit="event.preventDefault(); submitResponse();">
+        <input type="text" id="response" placeholder="Type your answer..." />
+        <input type="file" id="file-input" />
+        <button type="submit">Submit</button>
+      </form>
+
+      <button id="start-recording">Start/Stop Recording</button>
+      <p id="recording-status"></p>
+    </div>
+
+    <div id="result" class="container" style="display: none;">
+      <h3>Thank you for your responses!</h3>
+      <ul id="answer-list"></ul>
+      <div id="report-container"></div>
+      <button onclick="restart()">Start Over</button>
+    </div>
+  </div>
+
+</div>
+
+
+ <script>
+  const sessionId = Math.random().toString(36).substr(2, 9);
+  let mediaRecorder;
+  let audioChunks = [];
+  let currentQuestion = "";
+  let lastUserResponse = null; 
+
+  window.onload = () => {
+    const storedReport = localStorage.getItem("summaryReport");
+    const storedAnswers = JSON.parse(localStorage.getItem("summaryAnswers") || "[]");
+
+    if (storedReport && storedAnswers.length > 0) {
+      showFinalResults(storedAnswers, storedReport);
+      return;
+    }
+
+    fetchNextQuestion();
+  };
+
+  document.getElementById("start-recording").addEventListener("click", async () => {
+    const status = document.getElementById("recording-status");
+
+    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = event => {
+          if (event.data.size > 0) audioChunks.push(event.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          if (audioChunks.length === 0) {
+            alert("No audio recorded.");
+            return;
+          }
+
+          const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+          const file = new File([audioBlob], "voice_input.wav", { type: "audio/wav" });
+
+          status.textContent = "Uploading voice...";
+
+          const formData = new FormData();
+          formData.append("session_id", sessionId);
+          formData.append("file", file);
+
+          lastUserResponse = "[Voice Uploaded]"; 
+          fetchNextQuestion(null, formData);
+
+          status.textContent = "";
+        };
+
+        mediaRecorder.start();
+        status.textContent = "Recording... Click again to stop.";
+      } catch (err) {
+        console.error("Error accessing microphone:", err);
+        alert("Microphone access denied or unavailable.");
+      }
+    } else if (mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+    }
+  });
+
+  function fetchNextQuestion(user_response = null, formData = null) {
+    const questionEl = document.getElementById("question-text");
+    const spinner = document.getElementById("loading-spinner");
+    const spinnerText = document.getElementById("spinner-text");
+
+    questionEl.classList.add("fade-out");
+    spinner.style.display = "flex";
+    spinnerText.textContent = "Validating...";
+
+    setTimeout(() => {
+      spinnerText.textContent = "Generating next question...";
+    }, 750);
+
+    setTimeout(() => {
+      let fetchOptions;
+
+      if (formData || user_response) {
+        fetchOptions = {
+          method: "POST",
+          body: formData || createFormData(user_response)
+        };
+      } else {
+        const payload = { 
+          session_id: sessionId,
+          report: "The report about Abhishek Fruits is correct and is certified Organic product and uses regenerative technique",
+          category: "food",
+          sub_categories: ["Regenerative"]
+        };
+
+        fetchOptions = {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        };
+      }
+
+      fetch("https://groundchatsystem.onrender.com/chats", fetchOptions)
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById("response").value = "";
+          document.getElementById("file-input").value = "";
+
+          spinner.style.display = "none";
+
+          if (data.completed) {
+            document.getElementById("chat-box").style.display = "none";
+            document.getElementById("result").style.display = "flex";
+
+            const list = document.getElementById("answer-list");
+            list.innerHTML = "";
+            data.answers.forEach((ans, idx) => {
+              const li = document.createElement("li");
+              li.innerText = `Q${idx + 1}: ${ans}`;
+              list.appendChild(li);
+            });
+
+            const reportSection = document.createElement("pre");
+            reportSection.innerText = data.report;
+            document.getElementById("report-container").innerHTML = "";
+            document.getElementById("report-container").appendChild(reportSection);
+
+            localStorage.setItem("summaryReport", data.report);
+            localStorage.setItem("summaryAnswers", JSON.stringify(data.answers));
+          } else if (data.message) {
+            const previousQuestion = currentQuestion;
+            currentQuestion = data.message;
+
+            if (lastUserResponse && previousQuestion) { 
+              updateAnsweredQuestions(previousQuestion, lastUserResponse);
+              lastUserResponse = null; // ✅ NEW
+            }
+
+            questionEl.innerText = data.message;
+            questionEl.classList.remove("fade-out");
+            questionEl.classList.add("fade-in");
+
+            setTimeout(() => {
+              questionEl.classList.remove("fade-in");
+            }, 500);
+          }
+        })
+        .catch(err => {
+          spinner.style.display = "none";
+          console.error("Error:", err);
+          alert("Failed to connect to the server. Make sure the backend is running.");
+        });
+    }, 1500); 
+  }
+
+  function submitResponse() {
+    const text = document.getElementById("response").value.trim();
+    const fileInput = document.getElementById("file-input");
+    const file = fileInput.files[0];
+
+    if (!text && !file) {
+      alert("Please enter a response or upload a file.");
+      return;
+    }
+
+    lastUserResponse = text || "[File Uploaded]"; 
+    const formData = createFormData(text, file);
+    fetchNextQuestion(null, formData);
+  }
+
+  function createFormData(user_response = "", file = null) {
+    const formData = new FormData();
+    formData.append("session_id", sessionId);
+    if (user_response) formData.append("user_response", user_response);
+    if (file) formData.append("file", file);
+
+    return formData;
+  }
+
+  function updateAnsweredQuestions(question, response) {
+    const answeredDiv = document.getElementById("answered-questions");
+    const div = document.createElement("div");
+    div.classList.add("answered-question");
+    div.innerHTML = `<strong>${question}</strong><br/>Answer: ${response}`;
+    answeredDiv.appendChild(div);
+  }
+
+  function restart() {
+    localStorage.clear();
+    window.location.reload();
+  }
+
+  function showFinalResults(answers, report) {
+    document.getElementById("chat-box").style.display = "none";
+    document.getElementById("result").style.display = "flex";
+
+    const list = document.getElementById("answer-list");
+    list.innerHTML = "";
+    answers.forEach((ans, idx) => {
+      const li = document.createElement("li");
+      li.innerText = `Q${idx + 1}: ${ans}`;
+      list.appendChild(li);
+    });
+
+    const reportSection = document.createElement("pre");
+    reportSection.innerText = report;
+    document.getElementById("report-container").innerHTML = "";
+    document.getElementById("report-container").appendChild(reportSection);
+  }
+</script>
+
+</body>
+</html>
